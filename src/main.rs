@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use cursive::Cursive;
 use cursive::With;
-use cursive::theme::BorderStyle;
+use cursive::theme::{BaseColor, BorderStyle};
 use cursive::theme::Palette;
 use cursive::view::Nameable;
 use cursive::view::Resizable;
@@ -18,6 +18,7 @@ use cursive::views::LinearLayout;
 use cursive::views::ScrollView;
 use cursive::views::TextView;
 use cursive::theme::Effect::Bold;
+use cursive::utils::markup::StyledString;
 use lazy_static::lazy_static;
 
 use crate::client::Client;
@@ -160,7 +161,9 @@ lazy_static! {
                  let mut list = s.find_name::<LinearLayout>("message_list").unwrap();
                  for m in MESSAGE_QUEUE.lock().unwrap().iter() {
                      list.add_child(LinearLayout::horizontal()
-                         .child(TextView::new(format!("{}: ", m.0)).style(Bold))
+                         .child(TextView::new(
+                             StyledString::styled(format!("{}: ", m.0),
+                                                  cursive::theme::Color::Light(BaseColor::Yellow))).style(Bold))
                          .child(TextView::new(m.1.to_owned()))
                      )
                  }
