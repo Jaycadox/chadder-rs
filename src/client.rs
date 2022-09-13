@@ -20,7 +20,8 @@ pub struct Client {
     message_queue: Vec<Vec<u8>>,
     username: String,
     key: Option<xchacha20poly1305_ietf::Key>,
-    nonce: Option<xchacha20poly1305_ietf::Nonce>
+    nonce: Option<xchacha20poly1305_ietf::Nonce>,
+    ip: String
 }
 
 impl Client {
@@ -45,11 +46,11 @@ impl Client {
         }
     }
 
-    pub fn new(username: String) -> Self {
+    pub fn new(username: String, ip: String) -> Self {
         Client {
             message_receive: None,
             message_queue: vec!(),
-            username, key: None, nonce: None
+            username, key: None, nonce: None, ip
         }
     }
 
@@ -63,7 +64,10 @@ impl Client {
                 }
             }
         }
-
+        data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
+            Ok(bytes) => bytes,
+            Err(_) => return Err("Unable to decompress packet".into()),
+        };
         let pack = match shared::deserialize(&data) {
             Some(pack) => pack,
             None => {
@@ -151,6 +155,7 @@ impl Client {
         let nonce = enc.lock().unwrap().nonce;
         for message in enc.lock().unwrap().message_queue.clone() {
             let mut message = message;
+            message = miniz_oxide::deflate::compress_to_vec(&message, 6);
             if let Some(key) = &key {
                 if let Some(nonce) = &nonce {
                     message = xchacha20poly1305_ietf::seal(&message, None, nonce, key);
@@ -163,7 +168,7 @@ impl Client {
         let encryption: Arc<Mutex<EncryptionInfo>> = Arc::new(Mutex::new(EncryptionInfo::new()));
         let encryption_1 = Arc::clone(&encryption);
         let this_2 = Arc::clone(&this);
-        let addr: SocketAddr = format!("127.0.0.1:{}", PORT).parse().unwrap();
+        let addr: SocketAddr = format!("{}:{}", this.lock().unwrap().ip, PORT).parse().unwrap();
         let stream = TcpStream::connect(addr).await?;
         while let Err(_err) = stream.peer_addr() {}
         println!("Client: connected");

@@ -87,7 +87,8 @@ async fn main() {
         .child(EditView::default()
             .on_submit(|s, _| {
                 let name = s.find_name::<EditView>("name").unwrap();
-                chat(s, name.get_content().to_string());
+                let ip = s.find_name::<EditView>("host").unwrap();
+                chat(s, name.get_content().to_string(), ip.get_content().to_string());
             })
             .with_name("name")
         )
@@ -95,7 +96,8 @@ async fn main() {
         .child(EditView::content(EditView::default(), "127.0.0.1")
             .on_submit(|s, _| {
                 let name = s.find_name::<EditView>("name").unwrap();
-                chat(s, name.get_content().to_string());
+                let ip = s.find_name::<EditView>("host").unwrap();
+                chat(s, name.get_content().to_string(), ip.get_content().to_string());
             })
             .with_name("host")
         )
@@ -121,8 +123,8 @@ lazy_static! {
 
 
 
- fn chat(s: &mut Cursive, name: String) {
-     let client: Arc<Mutex<Client>> = Arc::new(Mutex::new(Client::new(name)));
+ fn chat(s: &mut Cursive, name: String, ip: String) {
+     let client: Arc<Mutex<Client>> = Arc::new(Mutex::new(Client::new(name, ip)));
      let thr_client = Arc::clone(&client);
      let cursive: Arc<Mutex<&mut Cursive>> = Arc::from(Mutex::from(s));
      let cb_sink = cursive.lock().unwrap().cb_sink().clone();

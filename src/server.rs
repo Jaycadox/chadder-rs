@@ -56,6 +56,7 @@ async fn handle_packet(index: usize, mut peers: Vec<&mut NetPeer>, packet: Packe
 
 async fn handle_raw_packet(data: &[u8], address: SocketAddr, connections: Arc<Mutex<Vec<NetPeer>>>) -> anyhow::Result<()> {
     let mut data = Vec::from(data);
+
     for connection in connections.lock().await.iter() {
         if connection.interface.address != address {
             continue;
@@ -70,6 +71,10 @@ async fn handle_raw_packet(data: &[u8], address: SocketAddr, connections: Arc<Mu
         }
         break;
     }
+    data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(anyhow!("Unable to decompress packet")),
+    };
     let pack = match shared::deserialize(&data) {
         Some(pack) => pack,
         None => {
@@ -134,6 +139,7 @@ async fn handle_connection_writer(mut write: WriteHalf<TcpStream>,
             }
             for (packet, encrypt) in &connection.interface.queue {
                 let mut packet = packet.clone();
+                packet = miniz_oxide::deflate::compress_to_vec(&packet, 6);
                 if *encrypt {
                     if let Some(key) = &connection.key {
                         if let Some(nonce) = &connection.nonce {
@@ -249,7 +255,7 @@ impl SocketInterface {
 pub async fn start() -> io::Result<()> {
     println!("Chadder-rs: pre alpha 0.1");
 
-    let server = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", PORT)).await?;
+    let server = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await?;
     let connections: Arc<Mutex<Vec<NetPeer>>> = Arc::new(Mutex::new(vec!()));
     let connections_1: Arc<Mutex<Vec<NetPeer>>> = Arc::clone(&connections);
 

@@ -28,5 +28,7 @@ async-net = "*"
 rsa = "0.6.1"
 sodiumoxide = "0.2.7"
 anyhow = "1.0.64"
+miniz_oxide = "0.6.2"
+
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
