@@ -86,7 +86,7 @@ async fn handle_raw_packet(data: &[u8], address: SocketAddr, connections: Arc<Mu
             if pack.secret != 46 {
                 return Err(anyhow!("Invalid connection secret"));
             }
-            if pack.name.trim() == "System" {
+            if pack.name.trim() == "System" || pack.name.trim() == "Client" {
                 return Err(anyhow!("Illegal username"));
             }
             for connection in connections.lock().await.iter_mut() {
