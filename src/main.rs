@@ -103,11 +103,17 @@ async fn main() {
             })
             .with_name("host")
         )
-    ).button("Start server", move |siv| {
-        let mut serv = b_serv.as_ref().borrow_mut();
-        *serv = true;
-        Cursive::quit(siv);
-    }).title("Connection info").full_screen());
+    ).button("Start client", |s| {
+        let name = s.find_name::<EditView>("name").unwrap();
+        let ip = s.find_name::<EditView>("host").unwrap();
+        chat(s, name.get_content().to_string(), ip.get_content().to_string());
+    })
+        .button("Start server", move |siv| {
+            let mut serv = b_serv.as_ref().borrow_mut();
+            *serv = true;
+            Cursive::quit(siv);
+        })
+        .title("Connection info").full_screen());
     siv.run();
     if *server.as_ref().borrow() {
         server::start().await.unwrap();
