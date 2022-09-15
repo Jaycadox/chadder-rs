@@ -1,3 +1,4 @@
+use crate::client::Client;
 use cursive::align::HAlign;
 use cursive::theme::Effect::Bold;
 use cursive::theme::Palette;
@@ -21,8 +22,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-
-use crate::client::Client;
 mod client;
 mod server;
 mod shared;

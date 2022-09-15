@@ -1,6 +1,7 @@
 use crate::shared::{self, MessagePacket, Packet, COMPRESSION};
 use anyhow::anyhow;
 use async_net::SocketAddr;
+use log::{debug, info, warn};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{PaddingScheme, PublicKey, RsaPublicKey};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
+extern crate log;
 
 // const SERVER: Token = Token(0);
 const PORT: u16 = 9000;
@@ -28,7 +30,7 @@ async fn handle_packet(
         if content.is_empty() {
             return Ok(());
         }
-        println!("[{}]: {}", peer.name(), content);
+        info!("[{}]: {}", peer.name(), content);
         for p in peers {
             p.send_packet(Packet::Message(MessagePacket {
                 sender: peer.name(),
@@ -62,7 +64,7 @@ async fn handle_packet(
             )));
             peers[index].key = Some(x_key);
             peers[index].nonce = Some(x_nonce);
-            println!(
+            debug!(
                 "Client ({}) has established a encrypted connection.",
                 peers[index].interface.address
             );
@@ -127,7 +129,7 @@ async fn handle_raw_packet(
                     continue;
                 }
                 if let Some(prof) = &connection.generate_profile(pack.name.clone()) {
-                    println!(
+                    debug!(
                         "Client ({}) generated profile: {:?}",
                         connection.interface.address, prof
                     );
@@ -191,7 +193,7 @@ async fn handle_connection_writer(
                     Ok(_) => {}
                     Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => continue,
                     Err(_err) => {
-                        println!("(Server) packet write routine failed!");
+                        warn!("(Server) packet write routine failed!");
                         return Ok(());
                     }
                 }
@@ -215,7 +217,7 @@ async fn handle_connection(
                 match handle_raw_packet(&buffer[0..n], address, Arc::clone(&connections)).await {
                     Ok(_) => {}
                     Err(err) => {
-                        println!("Dropping client {} ({:?})", &address, err);
+                        warn!("Dropping client {} ({:?})", &address, err);
                         return Err(format!("{:?}", err).into());
                     }
                 }
@@ -304,16 +306,35 @@ impl SocketInterface {
 }
 
 pub async fn start() -> io::Result<()> {
-    println!("Chadder-rs: pre alpha 0.1");
+    fern::Dispatch::new()
+        // Perform allocation-free log formatting
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{} [{}] [{}] {}",
+                chrono::Local::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                record.target(),
+                record.level(),
+                message
+            ))
+        })
+        // Add blanket level filter -
+        .level(log::LevelFilter::Debug)
+        // - and per-module overrides
+        // Output to stdout, files, and other Dispatch configurations
+        .chain(std::io::stdout())
+        // Apply globally
+        .apply()
+        .unwrap();
+    info!("Chadder-rs: pre alpha 0.1");
 
     let server = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await?;
     let connections: Arc<Mutex<Vec<NetPeer>>> = Arc::new(Mutex::new(vec![]));
     let connections_1: Arc<Mutex<Vec<NetPeer>>> = Arc::clone(&connections);
 
-    println!("Server bound on port: {}", PORT);
+    debug!("Server bound on port: {}", PORT);
     while let Ok((stream, address)) = server.accept().await {
         let addr_c = address;
-        println!("Connection with peer established: {}", addr_c.clone());
+        info!("Connection with peer established: {}", addr_c.clone());
         let (read, write) = tokio::io::split(stream);
         connections_1.lock().await.push(NetPeer::new(address));
         let connections_2 = Arc::clone(&connections_1);
@@ -324,7 +345,7 @@ pub async fn start() -> io::Result<()> {
                 Ok(_) => "lost connection".to_string(),
                 Err(e) => format!("{:?}", e),
             };
-            println!("Client ({}) disconnected: {}", addr_c, error);
+            info!("Client ({}) disconnected: {}", addr_c, error);
             for connection in connections_4.lock().await.iter_mut() {
                 if connection.interface.address == address {
                     connection.send_packet(Packet::Message(MessagePacket {
@@ -339,7 +360,7 @@ pub async fn start() -> io::Result<()> {
                 .retain(|f| f.interface.address != address);
         });
         tokio::spawn(async move {
-            println!(
+            debug!(
                 "{:?}",
                 handle_connection_writer(write, address, connections_3).await
             );

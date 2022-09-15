@@ -29,6 +29,9 @@ rsa = "0.6.1"
 sodiumoxide = "0.2.7"
 anyhow = "1.0.64"
 miniz_oxide = "0.6.2"
+log = "0.4"
+fern = "0.6.1"
+chrono = "0.4.22"
 
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
