@@ -99,10 +99,12 @@ async fn handle_raw_packet(data: &[u8], address: SocketAddr, connections: Arc<Mu
                 if connection.interface.address != address {
                     continue;
                 }
-                if !connection.generate_profile(pack.name.clone()) {
+                if let Some(prof) = &connection.generate_profile(pack.name.clone()) {
+                    println!("Client ({}) generated profile: {:?}", connection.interface.address, prof);
+                } else {
                     return Err(anyhow!("Duplicate connection packet"));
                 }
-                println!("Client ({}) generated profile: {:?}", connection.interface.address, connection.profile);
+;
                 break;
             }
             for connection in connections.lock().await.iter_mut() {
@@ -204,6 +206,9 @@ struct SocketInterface {
     address: SocketAddr,
     queue: Vec<(Vec<u8>, bool)>
 }
+
+
+
 #[derive(Clone, Debug)]
 struct NetPeer {
     interface: SocketInterface,
@@ -212,6 +217,7 @@ struct NetPeer {
     key: Option<xchacha20poly1305_ietf::Key>,
     profile: Option<PeerProfile>
 }
+
 impl NetPeer {
     fn new(address: SocketAddr) -> Self {
         NetPeer { interface: SocketInterface::new(address), profile: None, public_key: None, nonce: None, key: None }
@@ -226,12 +232,13 @@ impl NetPeer {
         self.interface.queue.push((serialized_pack, !matches!(packet, Packet::EncryptionEstablishKey(_))));
         true
     }
-    fn generate_profile(&mut self, username: String) -> bool {
+    fn generate_profile(&mut self, username: String) -> Option<PeerProfile> {
         if self.profile.is_some() {
-            return false;
+            return None;
         }
-        self.profile = Some(PeerProfile{ username: username.trim().to_owned() });
-        true
+        let prof = Some(PeerProfile{ username: username.trim().to_owned() });
+        self.profile = prof.clone();
+        Some(prof.unwrap())
     }
     fn has_profile(&self) -> bool {
         matches!(self.profile, Some(_))
