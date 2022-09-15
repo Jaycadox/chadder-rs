@@ -24,6 +24,7 @@ async fn handle_packet(index: usize, mut peers: Vec<&mut NetPeer>, packet: Packe
         if content.is_empty() {
             return Ok(());
         }
+        println!("[{}]: {}", peer.name(), content);
         for p in peers {
             p.send_packet(Packet::Message(MessagePacket{ sender: peer.name(), content: content.clone() }));
         }
