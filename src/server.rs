@@ -196,7 +196,6 @@ async fn handle_connection(mut read: ReadHalf<TcpStream>,
             }
         }
     }
-    println!("Server: connection with client ended");
     Ok(())
 }
 #[derive(Clone, Debug)]
@@ -273,7 +272,10 @@ pub async fn start() -> io::Result<()> {
         let connections_3 = Arc::clone(&connections_1);
         let connections_4 = Arc::clone(&connections_1);
         tokio::spawn(async move {
-            let error = format!("{:?}", handle_connection(read, address, connections_2).await);
+            let error = match handle_connection(read, address, connections_2).await {
+                Ok(_) => "lost connection".to_string(),
+                Err(e) => format!("{:?}", e)
+            };
             println!("Client ({}) disconnected: {}", addr_c, error);
             for connection in connections_4.lock().await.iter_mut() {
                 if connection.interface.address == address {
