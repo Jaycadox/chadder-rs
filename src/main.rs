@@ -3,6 +3,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use cursive::align::HAlign;
 use cursive::Cursive;
 use cursive::With;
 use cursive::theme::{BaseColor, BorderStyle};
@@ -163,8 +164,18 @@ lazy_static! {
                      list.add_child(LinearLayout::horizontal()
                          .child(TextView::new(
                              StyledString::styled(format!("{}: ", m.0),
-                                                  cursive::theme::Color::Light(BaseColor::Yellow))).style(Bold))
-                         .child(TextView::new(m.1.to_owned()))
+                                                  cursive::theme::Color::Light(match m.0.as_str() {
+                                                      "System" | "Client" => BaseColor::Black,
+                                                      _ => BaseColor::Yellow
+                                                  }))).style(Bold))
+                         .child(TextView::new(StyledString::styled(m.1.to_owned(), match m.0.as_str() {
+                             "System" => cursive::theme::Color::Light(BaseColor::Yellow),
+                             "Client" => cursive::theme::Color::Light(BaseColor::Green),
+                             _ => cursive::theme::Color::Light(BaseColor::White)
+                         })).h_align(match m.0.as_str() {
+                             "System" | "Client" => HAlign::Center,
+                             _ => HAlign::Left
+                         }).full_width())
                      )
                  }
                  MESSAGE_QUEUE.lock().unwrap().clear();
