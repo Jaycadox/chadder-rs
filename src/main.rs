@@ -140,8 +140,8 @@ async fn main() {
 }
 
 lazy_static! {
-    static ref MESSAGE_QUEUE: Arc<Mutex<Vec<(String, String)>>> = { Arc::new(Mutex::new(vec!())) };
-    static ref SEND_MESSAGE_QUEUE: Arc<Mutex<Vec<String>>> = { Arc::new(Mutex::new(vec!())) };
+    static ref MESSAGE_QUEUE: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(vec!()));
+    static ref SEND_MESSAGE_QUEUE: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec!()));
 }
 
 fn chat(s: &mut Cursive, name: String, ip: String) {
