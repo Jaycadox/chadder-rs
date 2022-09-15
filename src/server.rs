@@ -65,7 +65,7 @@ async fn handle_packet(
             peers[index].key = Some(x_key);
             peers[index].nonce = Some(x_nonce);
             debug!(
-                "Client ({}) has established a encrypted connection.",
+                "Client ({}) has established an encrypted connection.",
                 peers[index].interface.address
             );
         } else {
