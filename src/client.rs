@@ -142,7 +142,7 @@ impl Client {
             let mut buffer = [0; 1024];
             match read.read(&mut buffer).await {
                 Ok(n) if n == 0 => {
-                    break
+                    return Err("Connection to server lost".into());
                 },
                 Ok(n) => {
                     match Client::handle_raw_packet(Arc::clone(&this), &buffer[0..n], enc) {
@@ -161,9 +161,8 @@ impl Client {
                 }
             }
         }
-        Ok(())
     }
-    async fn handle_connection_writer(enc: Arc<Mutex<Self>>, write: &mut WriteHalf<TcpStream>) {
+    async fn handle_connection_writer(enc: Arc<Mutex<Self>>, write: &mut WriteHalf<TcpStream>) -> bool {
         let key = enc.lock().unwrap().key.clone();
         let nonce = enc.lock().unwrap().nonce;
         for message in enc.lock().unwrap().message_queue.clone() {
@@ -176,8 +175,9 @@ impl Client {
                     message = xchacha20poly1305_ietf::seal(&message, None, nonce, key);
                 }
             }
-            let _ = write.write(&message).await.unwrap();
+            if let Err(_) = write.write(&message).await { return false };
         }
+        true
     }
     pub async fn start(this: Arc<Mutex<Self>>) -> Result<(), io::Error> {
         let encryption: Arc<Mutex<EncryptionInfo>> = Arc::new(Mutex::new(EncryptionInfo::new()));
@@ -196,11 +196,13 @@ impl Client {
             let this_4 = Arc::clone(&this);
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             {
-                Client::handle_connection_writer(this_4,&mut write).await;
+                if !Client::handle_connection_writer(this_4,&mut write).await {
+                    break;
+                }
                 this.lock().unwrap().message_queue.clear();
             }
-            
         }
+        Ok(())
         // loop {
         //     let ready = stream.ready(Interest::READABLE | Interest::WRITABLE).await?;
         //     if true {

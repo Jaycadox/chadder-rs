@@ -147,6 +147,10 @@ lazy_static! {
                  cb_sink_2.send(Box::new(move |s| {
                      s.add_layer(Dialog::text(format!("Error: {}", err)))
                  })).unwrap();
+             } else {
+                 cb_sink_2.send(Box::new(move |s| {
+                     s.add_layer(Dialog::text("Connection to server lost"))
+                 })).unwrap();
              }
          });
  
