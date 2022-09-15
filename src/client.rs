@@ -8,10 +8,11 @@ use rsa::pkcs8::EncodePublicKey;
 use tokio::net::{TcpStream};
 use crate::shared;
 use tokio::io::{AsyncReadExt};
-use crate::shared::{EncryptionInfo, Packet};
+use crate::shared::{COMPRESSION, EncryptionInfo, Packet};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
 
 const PORT: u16 = 9000;
+const ENCRYPTION: bool = true;
 
 type MessageReceiveCallback = fn(String, String);
 
@@ -64,10 +65,13 @@ impl Client {
                 }
             }
         }
-        data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
-            Ok(bytes) => bytes,
-            Err(_) => return Err("Unable to decompress packet".into()),
-        };
+        if COMPRESSION {
+            data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
+                Ok(bytes) => bytes,
+                Err(_) => return Err("Unable to decompress packet".into()),
+            };
+        }
+
         let pack = match shared::deserialize(&data) {
             Some(pack) => pack,
             None => {
@@ -120,9 +124,18 @@ impl Client {
 
     async fn handle_connection(this: Arc<Mutex<Self>>, mut read: ReadHalf<TcpStream>, encryption: Arc<Mutex<EncryptionInfo>>) -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        this.lock().unwrap().send(Packet::RequestEncryption(shared::RequestEncryptionPacket {
-            public_key: encryption.lock().unwrap().public.clone().to_public_key_pem(LineEnding::CR).unwrap()
-        }));
+        if ENCRYPTION {
+            this.lock().unwrap().send(Packet::RequestEncryption(shared::RequestEncryptionPacket {
+                public_key: encryption.lock().unwrap().public.clone().to_public_key_pem(LineEnding::CR).unwrap()
+            }));
+        } else {
+            let name = this.lock().unwrap().username.clone();
+            this.lock().unwrap().send(Packet::Connection(shared::ConnectionPacket {
+                name,
+                secret: 46
+            }));
+        }
+
 
         loop {
             let enc = Arc::clone(&encryption);
@@ -155,7 +168,9 @@ impl Client {
         let nonce = enc.lock().unwrap().nonce;
         for message in enc.lock().unwrap().message_queue.clone() {
             let mut message = message;
-            message = miniz_oxide::deflate::compress_to_vec(&message, 6);
+            if COMPRESSION {
+                message = miniz_oxide::deflate::compress_to_vec(&message, 6);
+            }
             if let Some(key) = &key {
                 if let Some(nonce) = &nonce {
                     message = xchacha20poly1305_ietf::seal(&message, None, nonce, key);

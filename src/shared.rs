@@ -2,6 +2,8 @@ use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::{Serialize, Deserialize};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
 
+pub const COMPRESSION: bool = true;
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Packet {
     Connection(ConnectionPacket),

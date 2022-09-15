@@ -9,7 +9,7 @@ use tokio::net::{TcpStream};
 use tokio::io::{AsyncReadExt, ReadHalf, WriteHalf, AsyncWriteExt};
 use tokio::sync::Mutex;
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
-use crate::shared::{self, MessagePacket, Packet};
+use crate::shared::{self, COMPRESSION, MessagePacket, Packet};
 
 // const SERVER: Token = Token(0);
 const PORT: u16 = 9000;
@@ -71,10 +71,12 @@ async fn handle_raw_packet(data: &[u8], address: SocketAddr, connections: Arc<Mu
         }
         break;
     }
-    data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
-        Ok(bytes) => bytes,
-        Err(_) => return Err(anyhow!("Unable to decompress packet")),
-    };
+    if COMPRESSION {
+        data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
+            Ok(bytes) => bytes,
+            Err(_) => return Err(anyhow!("Unable to decompress packet")),
+        };
+    }
     let pack = match shared::deserialize(&data) {
         Some(pack) => pack,
         None => {
@@ -139,7 +141,9 @@ async fn handle_connection_writer(mut write: WriteHalf<TcpStream>,
             }
             for (packet, encrypt) in &connection.interface.queue {
                 let mut packet = packet.clone();
-                packet = miniz_oxide::deflate::compress_to_vec(&packet, 6);
+                if COMPRESSION {
+                    packet = miniz_oxide::deflate::compress_to_vec(&packet, 6);
+                }
                 if *encrypt {
                     if let Some(key) = &connection.key {
                         if let Some(nonce) = &connection.nonce {
