@@ -1,5 +1,5 @@
 use rsa::{RsaPrivateKey, RsaPublicKey};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
 
 pub const COMPRESSION: bool = true;
@@ -20,7 +20,7 @@ pub struct RequestEncryptionPacket {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ConnectionPacket {
     pub name: String,
-    pub secret: u8
+    pub secret: u8,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,14 +32,14 @@ pub struct MessagePacket {
 pub fn serialize(packet: &Packet) -> Option<Vec<u8>> {
     match bincode::serialize(packet) {
         Ok(out) => Some(out),
-        _ => None
+        _ => None,
     }
 }
 
 pub fn deserialize(packet: &[u8]) -> Option<Packet> {
     match bincode::deserialize(packet) {
         Ok(out) => Some(out),
-        _ => None
+        _ => None,
     }
 }
 
@@ -62,8 +62,7 @@ impl EncryptionInfo {
             public: public_key,
             private: private_key,
             nonce: xchacha20poly1305_ietf::gen_nonce(),
-            key: xchacha20poly1305_ietf::gen_key()
+            key: xchacha20poly1305_ietf::gen_key(),
         }
     }
-
 }
