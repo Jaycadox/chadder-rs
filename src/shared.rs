@@ -1,6 +1,8 @@
+use rand::Rng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
+use std::rc::Rc;
 
 pub const COMPRESSION: bool = true;
 
@@ -64,5 +66,47 @@ impl EncryptionInfo {
             nonce: xchacha20poly1305_ietf::gen_nonce(),
             key: xchacha20poly1305_ietf::gen_key(),
         }
+    }
+}
+
+#[derive(Clone)]
+struct HandleContainer<T: Sized> {
+    data: Rc<T>,
+    id: u32,
+}
+
+impl<T: Sized> HandleContainer<T> {
+    fn new(obj: T) -> HandleContainer<T> {
+        HandleContainer {
+            data: Rc::from(obj),
+            id: rand::thread_rng().gen::<u32>(),
+        }
+    }
+}
+
+trait Handle: Sized {
+    fn to_handle(self, storage: &mut HandleStorage<Self>) -> u32 {
+        let s = HandleContainer::new(self);
+        let id = s.id;
+        storage.data.push(s);
+        id
+    }
+}
+
+struct HandleStorage<T: Sized> {
+    data: Vec<HandleContainer<T>>,
+}
+
+impl<T: Sized> HandleStorage<T> {
+    fn new() -> Self {
+        HandleStorage { data: vec![] }
+    }
+    fn get_handle(&self, handle: u32) -> Option<Rc<T>> {
+        for cont in &self.data {
+            if cont.id == handle {
+                return Some(Rc::clone(&cont.data));
+            }
+        }
+        None
     }
 }
