@@ -428,8 +428,6 @@ pub async fn start() -> io::Result<()> {
             lua.lock().await.content(&content);
         }
     }
-
-    lua.lock().await.content("server.on_connection(function(username) server.send_message(username, \"System\", \"Welcome to the server!\") end)");
     lua.lock().await.scripts.iter_mut().for_each(|l| {
         l.lua
             .load(chunk! {
