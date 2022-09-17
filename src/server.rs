@@ -501,7 +501,7 @@ pub async fn start() -> io::Result<()> {
                     Err(e) => format!("{:?}", e),
                 };
             info!("Client ({}) disconnected: {}", addr_c, error);
-            for connection in futures::executor::block_on(connections_4.lock()).iter_mut() {
+            for connection in connections_4.lock().await.iter_mut() {
                 if connection.interface.address == address {
                     connection.send_packet(Packet::Message(MessagePacket {
                         sender: "System".to_owned(),
@@ -509,7 +509,9 @@ pub async fn start() -> io::Result<()> {
                     }));
                 }
             }
-            futures::executor::block_on(connections_4.lock())
+            connections_4
+                .lock()
+                .await
                 .retain(|f| f.interface.address != address);
         });
         tokio::spawn(async move {
