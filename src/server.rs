@@ -2,7 +2,7 @@ use crate::shared::{self, LuaLoader, MessagePacket, Packet, COMPRESSION};
 use anyhow::anyhow;
 use async_net::SocketAddr;
 use log::{debug, info, warn};
-use mlua::prelude::LuaFunction;
+use mlua::prelude::{LuaFunction, LuaTable};
 use mlua::{chunk, Value};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{PaddingScheme, PublicKey, RsaPublicKey};
@@ -214,6 +214,8 @@ async fn handle_raw_packet(
                 let name = pack.name.clone();
                 l.lua
                     .load(chunk! {
+                        if __connections == nil then __connections = {} end
+                        table.insert(__connections, $name)
                         if __on_connection_callbacks == nil then __on_connection_callbacks = {} end
                         for k,v in pairs(__on_connection_callbacks) do
                             v($name)
@@ -249,8 +251,26 @@ async fn handle_connection_writer(
     mut write: WriteHalf<TcpStream>,
     address: SocketAddr,
     connections: Arc<Mutex<Vec<NetPeer>>>,
+    messages: Arc<Mutex<Vec<(String, String, String)>>>,
 ) -> Result<(), Box<dyn Error>> {
     loop {
+        {
+            let mut lock = messages.lock().await;
+            let msgs = lock.clone();
+            lock.clear();
+            for (username, sender, content) in msgs {
+                for connection in connections.lock().await.iter_mut() {
+                    if connection.name() == username {
+                        connection.send_packet(Packet::Message(MessagePacket {
+                            sender: sender.clone(),
+                            content: content.clone(),
+                        }));
+                        break;
+                    }
+                }
+            }
+        }
+
         for connection in connections.lock().await.iter_mut() {
             if connection.interface.address != address {
                 continue;
@@ -281,7 +301,7 @@ async fn handle_connection_writer(
             }
             connection.interface.queue.clear();
         }
-        tokio::task::yield_now().await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 }
 
@@ -319,6 +339,7 @@ async fn handle_connection(
             }
         }
     }
+
     Ok(())
 }
 #[derive(Clone, Debug)]
@@ -432,29 +453,37 @@ pub async fn start() -> io::Result<()> {
     let server = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await?;
     let connections: Arc<Mutex<Vec<NetPeer>>> = Arc::new(Mutex::new(vec![]));
     let connections_1 = Arc::clone(&connections);
+    let message_queue = Arc::new(Mutex::new(vec![]));
 
     for l in lua.lock().await.scripts.iter_mut() {
-        let connections_l = Arc::clone(&connections);
         let server = l.lua.create_table().unwrap();
+        let message_queue = message_queue.clone();
         let send_message = l
             .lua
             .create_function(
                 move |_, (username, sender, message): (String, String, String)| {
-                    for ctn in futures::executor::block_on(connections_l.lock()).iter_mut() {
-                        if ctn.name() != username {
-                            continue;
-                        }
-                        ctn.send_packet(Packet::Message(MessagePacket {
-                            sender,
-                            content: message,
-                        }));
-                        return Ok(Value::Boolean(true));
+                    {
+                        let message_queue = message_queue.clone();
+                        let future = tokio::task::spawn_blocking(move || {
+                            let mut lock = message_queue.blocking_lock();
+                            lock.push((username, sender, message));
+                        });
+                        futures::executor::block_on(future).unwrap();
                     }
-                    Ok(Value::Boolean(false))
+
+                    Ok(())
                 },
             )
             .unwrap();
         server.set("send_message", send_message).unwrap();
+        let connections = l
+            .lua
+            .create_function(move |l, _: ()| {
+                let ctns = l.globals().get::<&str, LuaTable>("__connections").unwrap();
+                Ok(ctns)
+            })
+            .unwrap();
+        server.set("connections", connections).unwrap();
         let on_connection = l
             .lua
             .create_function(move |l, callback: LuaFunction| {
@@ -468,6 +497,20 @@ pub async fn start() -> io::Result<()> {
             })
             .unwrap();
         server.set("on_connection", on_connection).unwrap();
+
+        let on_disconnection = l
+            .lua
+            .create_function(move |l, callback: LuaFunction| {
+                l.load(chunk! {
+                    if __on_disconnection_callbacks == nil then __on_disconnection_callbacks = {} end
+                    __on_disconnection_callbacks[#__on_disconnection_callbacks+1] = $callback
+                })
+                    .exec()
+                    .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        server.set("on_disconnection", on_disconnection).unwrap();
         l.lua.globals().set("server", server).unwrap();
     }
     for sc in lua.lock().await.scripts.iter_mut() {
@@ -494,7 +537,9 @@ pub async fn start() -> io::Result<()> {
         let connections_2 = Arc::clone(&connections_1);
         let connections_3 = Arc::clone(&connections_1);
         let connections_4 = Arc::clone(&connections_1);
+        let connections_5 = Arc::clone(&connections_1);
         let lua_1 = Arc::clone(&lua);
+        let lua_2 = Arc::clone(&lua);
         tokio::spawn(async move {
             let error =
                 match handle_connection(read, address, connections_2, Arc::clone(&lua_1)).await {
@@ -502,6 +547,25 @@ pub async fn start() -> io::Result<()> {
                     Err(e) => format!("{:?}", e),
                 };
             info!("Client ({}) disconnected: {}", addr_c, error);
+            let mut name = "".to_owned();
+            for ctn in connections_4.lock().await.iter() {
+                if ctn.interface.address == addr_c {
+                    name = ctn.name();
+                }
+            }
+
+            lua_2.lock().await.scripts.iter_mut().for_each(|l| {
+                let name = name.clone();
+                l.lua
+                    .load(chunk! {
+                        if __on_disconnection_callbacks == nil then __on_disconnection_callbacks = {} end
+                        for k,v in pairs(__on_disconnection_callbacks) do
+                            v($name)
+                        end
+                    })
+                    .exec()
+                    .unwrap();
+            });
             for connection in connections_4.lock().await.iter_mut() {
                 if connection.interface.address == address {
                     connection.send_packet(Packet::Message(MessagePacket {
@@ -514,11 +578,26 @@ pub async fn start() -> io::Result<()> {
                 .lock()
                 .await
                 .retain(|f| f.interface.address != address);
+
+            let mut name = vec![];
+            for ctn in connections_5.lock().await.iter() {
+                name.push(ctn.name());
+            }
+            lua_2.lock().await.scripts.iter_mut().for_each(|l| {
+                let name = name.clone();
+                l.lua
+                    .load(chunk! {
+                        __connections = $name
+                    })
+                    .exec()
+                    .unwrap();
+            });
         });
+        let mq = message_queue.clone();
         tokio::spawn(async move {
             debug!(
                 "{:?}",
-                handle_connection_writer(write, address, connections_3).await
+                handle_connection_writer(write, address, connections_3, mq).await
             );
         });
     }

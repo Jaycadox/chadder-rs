@@ -198,6 +198,7 @@ dependencies = [
  "cursive",
  "fern",
  "futures",
+ "itertools",
  "lazy_static",
  "log",
  "miniz_oxide",
