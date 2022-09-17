@@ -64,6 +64,11 @@ mod shared;
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "-s" {
+        server::start().await.unwrap();
+    }
+
     let server = Rc::new(RefCell::new(false));
     let b_serv = Rc::clone(&server);
     let mut siv = cursive::crossterm();
@@ -83,6 +88,21 @@ async fn main() {
             palette[Highlight] = Black.light();
         }),
     });
+
+    if args.len() > 1 && args[1] == "-c" {
+        let mut username = "Rechadder-Client".to_string();
+        let mut server = "127.0.0.1".to_string();
+        if args.len() > 2 {
+            username = args[2].clone();
+            if args.len() > 3 {
+                server = args[3].clone();
+            }
+        }
+        chat(&mut siv, username, server);
+        siv.run();
+        return;
+    }
+
     siv.add_fullscreen_layer(
         Dialog::around(
             LinearLayout::vertical()
@@ -149,6 +169,7 @@ fn chat(s: &mut Cursive, name: String, ip: String) {
     let cursive: Arc<Mutex<&mut Cursive>> = Arc::from(Mutex::from(s));
     let cb_sink = cursive.lock().unwrap().cb_sink().clone();
     let cb_sink_2 = cursive.lock().unwrap().cb_sink().clone();
+
     client.lock().unwrap().on_message_receive(|sender, msg| {
         MESSAGE_QUEUE.lock().unwrap().push((sender, msg));
     });
