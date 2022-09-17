@@ -428,17 +428,6 @@ pub async fn start() -> io::Result<()> {
             lua.lock().await.content(&content);
         }
     }
-    lua.lock().await.scripts.iter_mut().for_each(|l| {
-        l.lua
-            .load(chunk! {
-                if __on_server_callbacks == nil then __on_server_callbacks = {} end
-                for k,v in pairs(__on_server_callbacks) do
-                    v()
-                end
-            })
-            .exec()
-            .unwrap();
-    });
 
     let server = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await?;
     let connections: Arc<Mutex<Vec<NetPeer>>> = Arc::new(Mutex::new(vec![]));
@@ -484,6 +473,18 @@ pub async fn start() -> io::Result<()> {
     for sc in lua.lock().await.scripts.iter_mut() {
         sc.start();
     }
+
+    lua.lock().await.scripts.iter_mut().for_each(|l| {
+        l.lua
+            .load(chunk! {
+                if __on_server_callbacks == nil then __on_server_callbacks = {} end
+                for k,v in pairs(__on_server_callbacks) do
+                    v()
+                end
+            })
+            .exec()
+            .unwrap();
+    });
     debug!("Server bound on port: {}", PORT);
     while let Ok((stream, address)) = server.accept().await {
         let addr_c = address;
