@@ -32,6 +32,9 @@ miniz_oxide = "0.6.2"
 log = "0.4"
 fern = "0.6.1"
 chrono = "0.4.22"
-
+mlua = {version = "0.8.3", features = ["async", "lua54", "vendored", "macros"]}
+crossbeam = "0.8.2"
+futures = "0.3.24"
+parking_lot = "0.12.1"
 [profile.dev.package.num-bigint-dig]
 opt-level = 3

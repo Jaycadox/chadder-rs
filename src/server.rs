@@ -1,7 +1,9 @@
-use crate::shared::{self, MessagePacket, Packet, COMPRESSION};
+use crate::shared::{self, LuaLoader, MessagePacket, Packet, COMPRESSION};
 use anyhow::anyhow;
 use async_net::SocketAddr;
 use log::{debug, info, warn};
+use mlua::prelude::LuaFunction;
+use mlua::{chunk, Value};
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{PaddingScheme, PublicKey, RsaPublicKey};
 use sodiumoxide::crypto::aead::xchacha20poly1305_ietf;
@@ -18,55 +20,99 @@ const PORT: u16 = 9000;
 
 async fn handle_packet(
     index: usize,
-    mut peers: Vec<&mut NetPeer>,
+    peers: Arc<Mutex<Vec<NetPeer>>>,
     packet: Packet,
+    lua: Arc<Mutex<LuaLoader>>,
 ) -> anyhow::Result<()> {
-    let peer = &mut peers[index].clone();
     if let Packet::Message(pack) = &packet {
-        if !peer.has_profile() {
+        if !peers.lock().await.get(index).unwrap().has_profile() {
             return Err(anyhow::Error::msg("Message packet without profile"));
         }
         let content = pack.content.trim().to_owned();
         if content.is_empty() {
             return Ok(());
         }
-        info!("[{}]: {}", peer.name(), content);
-        for p in peers {
+
+        let mut should_cancel = false;
+        let name = peers.lock().await.get(index).unwrap().name();
+        lua.lock().await.scripts.iter_mut().for_each(|l| {
+            let ctx = l.lua.create_table().unwrap();
+            ctx.set("username", name.clone()).unwrap();
+            ctx.set("message", content.clone()).unwrap();
+            l.lua
+                .load(chunk! {
+                    __ret = false
+                    for k,v in pairs(__on_message_callbacks) do
+                        if v($ctx) == true then
+                            __ret = true
+                        end
+                    end
+                })
+                .exec()
+                .unwrap();
+            let ret = l.lua.globals().get::<&str, Value>("__ret").unwrap();
+            if let Value::Boolean(ret) = ret {
+                if ret {
+                    should_cancel = true;
+                }
+            }
+        });
+        if should_cancel {
+            return Ok(());
+        }
+        let name = peers.lock().await.get(index).unwrap().name();
+        info!(
+            "[{}]: {}",
+            peers.lock().await.get(index).unwrap().name(),
+            content
+        );
+        for p in peers.lock().await.iter_mut() {
             p.send_packet(Packet::Message(MessagePacket {
-                sender: peer.name(),
+                sender: name.clone(),
                 content: content.clone(),
             }));
         }
     } else if let Packet::RequestEncryption(pack) = &packet {
         if let Ok(key) = RsaPublicKey::from_public_key_pem(&*pack.public_key) {
-            peers[index].public_key = Some(key.clone());
+            peers.lock().await.get_mut(index).unwrap().public_key = Some(key.clone());
             let x_key = xchacha20poly1305_ietf::gen_key();
             let x_nonce = xchacha20poly1305_ietf::gen_nonce();
 
             let encoded_key = bincode::serialize(&x_key)?;
             let encoded_nonce = bincode::serialize(&x_nonce)?;
-            let mut rng = rand::thread_rng();
-            let encrypted_key = key.encrypt(
-                &mut rng,
-                PaddingScheme::new_pkcs1v15_encrypt(),
-                &encoded_key,
-            )?;
-            let encrypted_nonce = key.encrypt(
-                &mut rng,
-                PaddingScheme::new_pkcs1v15_encrypt(),
-                &encoded_nonce,
-            )?;
+
+            let encrypted_key;
+            let encrypted_nonce;
+            {
+                let mut rng = rand::thread_rng();
+                encrypted_key = key.encrypt(
+                    &mut rng,
+                    PaddingScheme::new_pkcs1v15_encrypt(),
+                    &encoded_key,
+                )?;
+                encrypted_nonce = key.encrypt(
+                    &mut rng,
+                    PaddingScheme::new_pkcs1v15_encrypt(),
+                    &encoded_nonce,
+                )?;
+            }
+
             let res = xchacha20poly1305_ietf::seal(b"chadder", None, &x_nonce, &x_key);
-            peers[index].send_packet(Packet::EncryptionEstablishKey((
-                encrypted_key,
-                encrypted_nonce,
-                res,
-            )));
-            peers[index].key = Some(x_key);
-            peers[index].nonce = Some(x_nonce);
+            peers
+                .lock()
+                .await
+                .get_mut(index)
+                .unwrap()
+                .send_packet(Packet::EncryptionEstablishKey((
+                    encrypted_key,
+                    encrypted_nonce,
+                    res,
+                )));
+            peers.lock().await.get_mut(index).unwrap().key = Some(x_key);
+            peers.lock().await.get_mut(index).unwrap().nonce = Some(x_nonce);
             debug!(
                 "Client ({}) has established an encrypted connection.",
-                peers[index].interface.address
+                peers.lock().await.get(index).unwrap().interface.address
             );
         } else {
             return Err(anyhow::anyhow!(
@@ -81,29 +127,34 @@ async fn handle_raw_packet(
     data: &[u8],
     address: SocketAddr,
     connections: Arc<Mutex<Vec<NetPeer>>>,
+    lua: Arc<Mutex<LuaLoader>>,
 ) -> anyhow::Result<()> {
     let mut data = Vec::from(data);
-
-    for connection in connections.lock().await.iter() {
-        if connection.interface.address != address {
-            continue;
-        }
-        if let Some(key) = &connection.key {
-            if let Some(nonce) = &connection.nonce {
-                data = match xchacha20poly1305_ietf::open(&data, None, nonce, key) {
-                    Ok(data) => data,
-                    Err(_) => return Err(anyhow!("Unable to decrypt incoming packet")),
-                };
+    {
+        for connection in connections.lock().await.iter() {
+            if connection.interface.address != address {
+                continue;
             }
+            if let Some(key) = &connection.key {
+                if let Some(nonce) = &connection.nonce {
+                    data = match xchacha20poly1305_ietf::open(&data, None, nonce, key) {
+                        Ok(data) => data,
+                        Err(_) => return Err(anyhow!("Unable to decrypt incoming packet")),
+                    };
+                }
+            }
+            break;
         }
-        break;
     }
-    if COMPRESSION {
-        data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
-            Ok(bytes) => bytes,
-            Err(_) => return Err(anyhow!("Unable to decompress packet")),
-        };
+    {
+        if COMPRESSION {
+            data = match miniz_oxide::inflate::decompress_to_vec_with_limit(&*data, 4096) {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(anyhow!("Unable to decompress packet")),
+            };
+        }
     }
+
     let pack = match shared::deserialize(&data) {
         Some(pack) => pack,
         None => {
@@ -121,41 +172,71 @@ async fn handle_raw_packet(
             if pack.name.trim() == "System" || pack.name.trim() == "Client" {
                 return Err(anyhow!("Illegal username"));
             }
-            for connection in connections.lock().await.iter_mut() {
-                if connection.name().trim() == pack.name {
-                    return Err(anyhow!("Username taken"));
+            let count;
+            {
+                count = connections.lock().await.len();
+            }
+            for i in 0..count {
+                {
+                    if connections.lock().await[i].name().trim() == pack.name {
+                        return Err(anyhow!("Username taken"));
+                    }
+                    if connections.lock().await[i].interface.address != address {
+                        continue;
+                    }
                 }
-                if connection.interface.address != address {
-                    continue;
+
+                let prof;
+                {
+                    prof = connections.lock().await[i].generate_profile(pack.name.clone());
                 }
-                if let Some(prof) = &connection.generate_profile(pack.name.clone()) {
-                    debug!(
-                        "Client ({}) generated profile: {:?}",
-                        connection.interface.address, prof
-                    );
+                if let Some(prof) = prof {
+                    {
+                        debug!(
+                            "Client ({}) generated profile: {:?}",
+                            connections.lock().await[i].interface.address,
+                            prof
+                        );
+                    }
                 } else {
                     return Err(anyhow!("Duplicate connection packet"));
                 };
                 break;
             }
+
             for connection in connections.lock().await.iter_mut() {
                 connection.send_packet(Packet::Message(MessagePacket {
                     sender: "System".to_owned(),
                     content: format!("{} joined!", pack.name).to_owned(),
                 }));
             }
+            lua.lock().await.scripts.iter_mut().for_each(|l| {
+                let name = pack.name.clone();
+                l.lua
+                    .load(chunk! {
+                        if __on_connection_callbacks == nil then __on_connection_callbacks = {} end
+                        for k,v in pairs(__on_connection_callbacks) do
+                            v($name)
+                        end
+                    })
+                    .exec()
+                    .unwrap();
+            });
         }
         _ => {
-            let mut r_peers = connections.lock().await;
-            let mut peers = vec![];
             let mut s_index = 0;
-            for (index, connection) in r_peers.iter_mut().enumerate() {
-                if connection.interface.address == address {
-                    s_index = index;
+            {
+                let mut r_peers = connections.lock().await;
+
+                for (index, connection) in r_peers.iter_mut().enumerate() {
+                    if connection.interface.address == address {
+                        s_index = index;
+                        break;
+                    }
                 }
-                peers.push(connection);
             }
-            if let Err(e) = handle_packet(s_index, peers, pack).await {
+
+            if let Err(e) = handle_packet(s_index, Arc::clone(&connections), pack, lua).await {
                 return Err(anyhow::anyhow!(e));
             }
         }
@@ -208,13 +289,21 @@ async fn handle_connection(
     mut read: ReadHalf<TcpStream>,
     address: SocketAddr,
     connections: Arc<Mutex<Vec<NetPeer>>>,
+    lua: Arc<Mutex<LuaLoader>>,
 ) -> Result<(), Box<dyn Error>> {
     loop {
         let mut buffer = [0; 1024];
         match read.read(&mut buffer).await {
             Ok(n) if n == 0 => break,
             Ok(n) => {
-                match handle_raw_packet(&buffer[0..n], address, Arc::clone(&connections)).await {
+                match handle_raw_packet(
+                    &buffer[0..n],
+                    address,
+                    Arc::clone(&connections),
+                    Arc::clone(&lua),
+                )
+                .await
+                {
                     Ok(_) => {}
                     Err(err) => {
                         warn!("Dropping client {} ({:?})", &address, err);
@@ -325,12 +414,78 @@ pub async fn start() -> io::Result<()> {
         // Apply globally
         .apply()
         .unwrap();
+
     info!("Chadder-rs: pre alpha 0.1");
+    let lua = Arc::new(Mutex::new(LuaLoader::new()));
+
+    if std::path::Path::new("scripts/").exists() {
+        for f in std::fs::read_dir("scripts/").unwrap() {
+            let f = f.unwrap();
+            let name = f.file_name();
+            let name = name.to_str().unwrap();
+            debug!("[LUA] Loading script: {name}");
+            let content = std::fs::read_to_string(f.path()).unwrap();
+            lua.lock().await.content(&content);
+        }
+    }
+
+    lua.lock().await.content("server.on_connection(function(username) server.send_message(username, \"System\", \"Welcome to the server!\") end)");
+    lua.lock().await.scripts.iter_mut().for_each(|l| {
+        l.lua
+            .load(chunk! {
+                if __on_server_callbacks == nil then __on_server_callbacks = {} end
+                for k,v in pairs(__on_server_callbacks) do
+                    v()
+                end
+            })
+            .exec()
+            .unwrap();
+    });
 
     let server = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", PORT)).await?;
     let connections: Arc<Mutex<Vec<NetPeer>>> = Arc::new(Mutex::new(vec![]));
-    let connections_1: Arc<Mutex<Vec<NetPeer>>> = Arc::clone(&connections);
+    let connections_1 = Arc::clone(&connections);
 
+    for l in lua.lock().await.scripts.iter_mut() {
+        let connections_l = Arc::clone(&connections);
+        let server = l.lua.create_table().unwrap();
+        let send_message = l
+            .lua
+            .create_function(
+                move |_, (username, sender, message): (String, String, String)| {
+                    for ctn in futures::executor::block_on(connections_l.lock()).iter_mut() {
+                        if ctn.name() != username {
+                            continue;
+                        }
+                        ctn.send_packet(Packet::Message(MessagePacket {
+                            sender,
+                            content: message,
+                        }));
+                        return Ok(Value::Boolean(true));
+                    }
+                    Ok(Value::Boolean(false))
+                },
+            )
+            .unwrap();
+        server.set("send_message", send_message).unwrap();
+        let on_connection = l
+            .lua
+            .create_function(move |l, callback: LuaFunction| {
+                l.load(chunk! {
+                    if __on_connection_callbacks == nil then __on_connection_callbacks = {} end
+                    __on_connection_callbacks[#__on_connection_callbacks+1] = $callback
+                })
+                .exec()
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        server.set("on_connection", on_connection).unwrap();
+        l.lua.globals().set("server", server).unwrap();
+    }
+    for sc in lua.lock().await.scripts.iter_mut() {
+        sc.start();
+    }
     debug!("Server bound on port: {}", PORT);
     while let Ok((stream, address)) = server.accept().await {
         let addr_c = address;
@@ -340,13 +495,15 @@ pub async fn start() -> io::Result<()> {
         let connections_2 = Arc::clone(&connections_1);
         let connections_3 = Arc::clone(&connections_1);
         let connections_4 = Arc::clone(&connections_1);
+        let lua_1 = Arc::clone(&lua);
         tokio::spawn(async move {
-            let error = match handle_connection(read, address, connections_2).await {
-                Ok(_) => "lost connection".to_string(),
-                Err(e) => format!("{:?}", e),
-            };
+            let error =
+                match handle_connection(read, address, connections_2, Arc::clone(&lua_1)).await {
+                    Ok(_) => "lost connection".to_string(),
+                    Err(e) => format!("{:?}", e),
+                };
             info!("Client ({}) disconnected: {}", addr_c, error);
-            for connection in connections_4.lock().await.iter_mut() {
+            for connection in futures::executor::block_on(connections_4.lock()).iter_mut() {
                 if connection.interface.address == address {
                     connection.send_packet(Packet::Message(MessagePacket {
                         sender: "System".to_owned(),
@@ -354,9 +511,7 @@ pub async fn start() -> io::Result<()> {
                     }));
                 }
             }
-            connections_4
-                .lock()
-                .await
+            futures::executor::block_on(connections_4.lock())
                 .retain(|f| f.interface.address != address);
         });
         tokio::spawn(async move {
