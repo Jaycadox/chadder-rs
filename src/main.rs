@@ -251,7 +251,7 @@ fn chat(s: &mut Cursive, name: String, ip: String) {
                             .full_width(),
                     )
                     .scroll_strategy(ScrollStrategy::StickToBottom)
-                    .fixed_height(15),
+                    .full_height(),
                 )
                 .child(DummyView.fixed_height(1))
                 .child(TextView::new("Compose message"))
@@ -267,8 +267,6 @@ fn chat(s: &mut Cursive, name: String, ip: String) {
                 )
                 .scrollable(),
         )
-        .title("Chadder client")
-        .fixed_width(70)
-        .fixed_height(20),
+        .title("Chadder client"),
     );
 }
